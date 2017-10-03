@@ -22,8 +22,60 @@ typedef struct hashtable
     struct tableentry **tab;
 } hashtable_t;
 
-/* creates hashtable */
-/* NOTE: dynamically allocated, remember to ht_free() */
+static unsigned hash(char *s);
+/*
+    hash: returns an unsigned integer using K&R hashing algorithm
+    from string s.
+*/
+
+static int insert_te(hashtable_t *ht, char *k, void *v);
+/*
+    insert_te: used by ht_insert() to insert a tableentry_t into
+    the hash table. returns 0 on succes and <0 on failure.
+*/
+static int delete_te(hashtable_t *ht, char *k);
+/*
+    delete_te: used by ht_delete() to delete the tableentry_t with
+    key k from the hash table pointed to by ht. returns 0 on success
+    and <0 on failure.
+*/
+
+static tableentry_t *lookup(hashtable_t *ht, char *k);
+/*
+    lookup: returns the tableentry_t with key k from hash table
+    *ht. returns NULL if not found.
+*/
+
+static int resize(hashtable_t **ht, size_t size);
+/*
+    resize: resizes the hash table **ht to a size of size. returns 0 on
+    success and <0 on failure.
+*/
+
+static tableentry_t *alloc_te(char *k, void *v, datatype_t type);
+/*
+    alloc_te: allocates memory on the heap for a tableentry_t with a key of
+    k and a val of v. The data type of the hash table is needed to properly
+    allocated the value. returns a pointer to the allocated memory or NULL on 
+    failure.
+*/
+
+static void free_te_list(tableentry_t *te);
+/*
+    free_te_list: frees the linked list of tableentry_t starting at *te.
+*/
+
+static void free_te(tableentry_t *te);
+/*
+    free_te: used by free_te_list() to free the tableentry_t's contents.
+*/
+
+static int *intdup(int *i);
+/*
+    intdup: allocates memory on the heap for an integer and initializes it to
+    the value of *i. returns a pointer to the allocated memory or NULL on failure.
+*/
+
 hashtable_t *ht_create(size_t size, datatype_t type)
 {
     hashtable_t *ht = NULL;
@@ -45,7 +97,76 @@ hashtable_t *ht_create(size_t size, datatype_t type)
     return ht;
 }
 
-/* creates hash for a hashtab */
+int ht_insert(hashtable_t **ht, char *k, void *v)
+{
+    tableentry_t *te;
+    /* unique entry */
+    if ((te = lookup(*ht, k)) == NULL)
+    {
+        if (insert_te(*ht, k, v) < 0)
+            return -1;
+        /* increase table size if load exceeds HIGHLOAD */
+        if (++((*ht)->load) > (*ht)->size * HIGHLOAD)
+            if (resize(ht, (*ht)->size * 2) < 0)
+                return -1;
+    }
+    /* replace val of previous entry */
+    else
+    {
+        free(te->val);
+        switch ((*ht)->type)
+        {
+            case STRING:
+                if ((te->val = strdup(v)) == NULL)
+                    return -1;
+                break;
+            case INTEGER:
+                if ((te->val = intdup(v)) == NULL)
+                    return -1;
+                break;
+            default:
+                return -1;
+        }
+    }
+    return 0;
+}
+
+int ht_delete(hashtable_t **ht, char *k)
+{
+    if (lookup(*ht, k) == NULL)
+        return -1;
+    else
+    {
+        if (delete_te(*ht, k) < 0)
+            return -1; 
+        /* resize ht if load balance falls below LOWLOAD */
+        if (--((*ht)->load) < (*ht)->size * LOWLOAD)
+            if (resize(ht, (*ht)->size/2) < 0)
+                return -1;
+    }
+    return 0;
+}
+
+void *ht_get(hashtable_t *ht, char *k)
+{
+    tableentry_t *te;
+    if ((te = lookup(ht, k)) == NULL)
+        return NULL;
+    return te->val;
+}
+
+void ht_free(hashtable_t *ht)
+{
+    size_t i;
+    if (ht)
+    {
+        for (i = 0; i < ht->size; i++)
+            if (ht->tab[i] != NULL)
+                free_te_list(ht->tab[i]);
+        free(ht);
+    }
+}
+
 static unsigned hash(char *s)
 {
     unsigned hashval;
@@ -54,35 +175,73 @@ static unsigned hash(char *s)
     return hashval;
 }
 
-static int *intdup(int *i)
+static int insert_te(hashtable_t *ht, char *k, void *v)
 {
-    int *new;
-    if ((new = malloc(sizeof(int))) == NULL)
-        return NULL;
-    *new = *i;
-    return new;
+    tableentry_t *te;
+    if ((te = alloc_te(k, v, ht->type)) == NULL)
+        return -1;
+    unsigned hashval = hash(k) % ht->size;
+    /* insert at beginning of linked list */
+    te->next = ht->tab[hashval]; 
+    ht->tab[hashval] = te;
+    return 0;
 }
 
-static void free_te(tableentry_t *te)
+static int delete_te(hashtable_t *ht, char *k)
 {
-    free(te->key);
-    free(te->val);
-    free(te);
-}
-
-/* loops through linked list freeing */
-static void free_te_list(tableentry_t *te)
-{
-    tableentry_t *next;
-    while (te != NULL)
+    tableentry_t *te, *prev;
+    unsigned hashval = hash(k) % ht->size;
+    te = ht->tab[hashval];
+    /* point head to next element if deleting head */
+    if (strcmp(te->key, k) == 0)
     {
-        next = te->next;
+        ht->tab[hashval] = te->next;
         free_te(te);
-        te = next;
+        return 0;
     }
+    /* otherwise look through, keeping track of prev to reassign its ->next */
+    for (; te != NULL; te = te->next)
+    {
+        if (strcmp(te->key, k) == 0)
+        {
+            prev->next = te->next;
+            free_te(te);
+            return 0;
+        }
+        prev = te;
+    }
+    return -1; /* not found */
 }
 
-/* creates a key-val pair */
+static tableentry_t *lookup(hashtable_t *ht, char *k)
+{
+    tableentry_t *te;
+    /* step through linked list */
+    for (te = ht->tab[hash(k) % ht->size]; te != NULL; te = te->next)
+        if (strcmp(te->key, k) == 0)
+            return te; /* found */
+    return NULL; /* not found */
+}
+
+static int resize(hashtable_t **ht, size_t size)
+{
+    hashtable_t *nht; /* new hashtable */
+    nht = ht_create(size, (*ht)->type);
+    /* rehash */
+    size_t i;
+    tableentry_t *te;
+    /* loop through hashtable */
+    for (i = 0; i < (*ht)->size; i++)
+        /* loop through linked list */
+        for (te = (*ht)->tab[i]; te != NULL; te = te->next)
+            /* insert & rehash old vals into new ht */
+            if (ht_insert(&nht, te->key, te->val) < 0)
+                return -1;
+    ht_free(*ht);
+    *ht = nht;
+    return 0;
+}
+
 static tableentry_t *alloc_te(char *k, void *v, datatype_t type)
 {
     tableentry_t *te = NULL;
@@ -120,132 +279,29 @@ static tableentry_t *alloc_te(char *k, void *v, datatype_t type)
     return te;
 }
 
-static tableentry_t *lookup(hashtable_t *ht, char *k)
+static void free_te_list(tableentry_t *te)
 {
-    tableentry_t *te;
-    /* step through linked list */
-    for (te = ht->tab[hash(k) % ht->size]; te != NULL; te = te->next)
-        if (strcmp(te->key, k) == 0)
-            return te; /* found */
-    return NULL; /* not found */
-}
-
-/* frees hashtable created from ht_create() */
-void ht_free(hashtable_t *ht)
-{
-    size_t i;
-    if (ht)
+    tableentry_t *next;
+    while (te != NULL)
     {
-        for (i = 0; i < ht->size; i++)
-            if (ht->tab[i] != NULL)
-                free_te_list(ht->tab[i]);
-        free(ht);
-    }
-}
-
-/* resizes hashtable, returns new hashtable and frees old */
-static hashtable_t *resize(hashtable_t *ht, size_t size)
-{
-    hashtable_t *nht; /* new hashtable */
-    nht = ht_create(size, oht->type);
-    /* rehash */
-    size_t i;
-    tableentry_t *te;
-    /* loop through hashtable */
-    for (i = 0; i < oht->size; i++)
-        /* loop through linked list */
-        for (te = oht->tab[i]; te != NULL; te = te->next)
-            /* insert & rehash old vals into new ht */
-            if (ht_insert(nht, te->key, te->val) == NULL)
-                return NULL;
-    ht_free(oht);
-    return nht;
-}
-
-/* inserts the key-val pair */
-hashtable_t *ht_insert(hashtable_t *ht, char *k, void *v)
-{
-    tableentry_t *te;
-    /* unique entry */
-    if ((te = lookup(ht, k)) == NULL)
-    {
-        if ((te = alloc_te(k, v, ht->type)) == NULL)
-            return NULL;
-        unsigned hashval = hash(k) % ht->size;
-        /* insert at beginning of linked list */
-        te->next = ht->tab[hashval]; 
-        ht->tab[hashval] = te;
-        /* increase table size if load exceeds HIGHLOAD */
-        if (++(ht->load) > ht->size * HIGHLOAD)
-            if ((ht = resize(ht, ht->size * 2)) == NULL)
-                return NULL;
-    }
-    /* replace val of previous entry */
-    else
-    {
-        free(te->val);
-        switch (ht->type)
-        {
-            case STRING:
-                if ((te->val = strdup(v)) == NULL)
-                    return NULL;
-                break;
-            case INTEGER:
-                if ((te->val = intdup(v)) == NULL)
-                    return NULL;
-                break;
-            default:
-                return NULL;
-        }
-    }
-    return ht;
-}
-
-static hashtable_t *delete_te(hashtable_t *ht, char *k)
-{
-    tableentry_t *te, *prev;
-    unsigned hashval = hash(k) % ht->size;
-    te = ht->tab[hashval];
-    /* point head to next element if deleting head */
-    if (strcmp(te->key, k) == 0)
-    {
-        ht->tab[hashval] = te->next;
+        next = te->next;
         free_te(te);
-        ht->load--;
-        return ht;
+        te = next;
     }
-    /* otherwise look through, keeping track of prev to reassign its ->next */
-    for (; te != NULL; te = te->next)
-    {
-        if (strcmp(te->key, k) == 0)
-        {
-            prev->next = te->next;
-            free_te(te);
-            /* resize ht if load balance falls below LOWLOAD */
-            if (--(ht->load) < ht->size * LOWLOAD)
-                if ((ht = resize(ht, ht->size/2)) == NULL)
-                    return NULL;
-            return ht;
-        }
-        prev = te;
-    }
-    return ht;
 }
 
-hashtable_t *ht_delete(hashtable_t *ht, char *k)
+static void free_te(tableentry_t *te)
 {
-    if (lookup(ht, k) == NULL)
-        return NULL;
-    else
-        delete_te(ht, k);
-    
+    free(te->key);
+    free(te->val);
+    free(te);
 }
 
-/* retrieve value from key */
-void *ht_get(hashtable_t *ht, char *k)
+static int *intdup(int *i)
 {
-    tableentry_t *te;
-    if ((te = lookup(ht, k)) == NULL)
+    int *new;
+    if ((new = malloc(sizeof(int))) == NULL)
         return NULL;
-    return te->val;
+    *new = *i;
+    return new;
 }
