@@ -33,6 +33,7 @@ static int insert_te(hashtable_t *ht, char *k, void *v);
     insert_te: used by ht_insert() to insert a tableentry_t into
     the hash table. returns 0 on succes and <0 on failure.
 */
+
 static int delete_te(hashtable_t *ht, char *k);
 /*
     delete_te: used by ht_delete() to delete the tableentry_t with
