@@ -14,14 +14,6 @@ typedef struct tableentry /* hashtab entry */
     void *val;
 } tableentry_t;
 
-typedef struct hashtable
-{
-    datatype_t type;
-    size_t size;
-    size_t load; /* number of keys filled */
-    struct tableentry **tab;
-} hashtable_t;
-
 static unsigned hash(char *s);
 /*
     hash: returns an unsigned integer using K&R hashing algorithm

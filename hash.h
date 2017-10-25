@@ -8,9 +8,19 @@
 #ifndef HASH
 #define HASH
 
-typedef struct hashtable hashtable_t;
+typedef enum datatype 
+{
+    STRING, 
+    INTEGER
+} datatype_t;
 
-typedef enum datatype {STRING, INTEGER} datatype_t;
+typedef struct hashtable
+{
+    datatype_t type;
+    size_t size;
+    size_t load; /* number of keys filled */
+    struct tableentry **tab;
+} hashtable_t;
 
 hashtable_t *ht_create(size_t size, datatype_t type);
 /*
